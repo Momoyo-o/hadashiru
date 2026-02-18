@@ -401,6 +401,10 @@ function addToDatabase(newIngredients) {
     }
 }
 
+// === 旧：AIによる総合評価（現在は未使用） ===
+// 現在は calculateFormulaBasedOverallScore で数式ベースのスコア計算を行っており、
+// この関数は使用していません。コメントとして残しています。
+/*
 async function analyzeIngredientsWithGemini(ingredients, rawText) {
     const profileInfo = `
 ユーザープロフィール:
@@ -477,6 +481,12 @@ ${rawText}
         detail: matchDetail ? matchDetail[1].trim() : analysisText,
         raw: analysisText
     };
+}
+*/
+
+// 現在使用中のダミー関数（呼び出しは残っているが、結果は使用されない）
+async function analyzeIngredientsWithGemini(ingredients, rawText) {
+    return { score: 0, reason: '', detail: '', raw: '' };
 }
 
 // === 結果表示 ===
@@ -1130,6 +1140,18 @@ function saveProduct() {
         return;
     }
     
+    // 重複チェック
+    const saved = getSavedProducts();
+    const isDuplicate = saved.some(p => p.name === productName);
+    if (isDuplicate) {
+        if (!confirm(`「${productName}」は既に保存されています。上書きしますか？`)) {
+            return;
+        }
+        // 既存のものを削除
+        const filtered = saved.filter(p => p.name !== productName);
+        localStorage.setItem('ecoskin_saved_products', JSON.stringify(filtered));
+    }
+    
     const product = {
         name: productName,
         brand: brandName,
@@ -1139,9 +1161,9 @@ function saveProduct() {
         timestamp: Date.now()
     };
     
-    const saved = getSavedProducts();
-    saved.push(product);
-    localStorage.setItem('ecoskin_saved_products', JSON.stringify(saved));
+    const updatedSaved = getSavedProducts();
+    updatedSaved.push(product);
+    localStorage.setItem('ecoskin_saved_products', JSON.stringify(updatedSaved));
     
     document.getElementById('save-message').style.display = 'block';
     setTimeout(() => {
@@ -1149,6 +1171,11 @@ function saveProduct() {
     }, 3000);
     
     loadSavedProductsList();
+}
+
+function saveAndAddToMyItems() {
+    saveProduct();
+    addToMyItems();
 }
 
 // === 相性チェック機能 ===
@@ -1186,34 +1213,45 @@ function checkCompatibility(newProductIngredients) {
     if (myItems.length === 0) return [];
     
     const conflicts = [];
+    const seen = new Set(); // 重複チェック用
     
     newProductIngredients.forEach(newIng => {
         myItems.forEach(item => {
             item.ingredients.forEach(existingIng => {
                 const conflict = findIncompatiblePair(newIng, existingIng);
                 if (conflict) {
-                    conflicts.push({
-                        newIngredient: newIng,
-                        existingProduct: item.name,
-                        existingIngredient: existingIng,
-                        reason: conflict.reason,
-                        severity: conflict.severity,
-                        recommendation: conflict.recommendation
-                    });
+                    // 重複チェック：製品名 + 理由 でユニークキーを作る
+                    const key = `${item.name}::${conflict.reason}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        conflicts.push({
+                            newIngredient: newIng,
+                            existingProduct: item.name,
+                            existingIngredient: existingIng,
+                            reason: conflict.reason,
+                            severity: conflict.severity,
+                            recommendation: conflict.recommendation
+                        });
+                    }
                 }
             });
         });
     });
     
+    console.log('相性チェック結果:', conflicts); // デバッグ用
     return conflicts;
 }
 
 function findIncompatiblePair(ingredient1, ingredient2) {
     for (const pair of INCOMPATIBLE_PAIRS) {
-        const match1 = pair.ingredients1.some(i => ingredient1.includes(i) || i.includes(ingredient1));
-        const match2 = pair.ingredients2.some(i => ingredient2.includes(i) || i.includes(ingredient2));
+        // 両方向でチェック
+        const match1to2 = pair.ingredients1.some(i => ingredient1.includes(i) || i.includes(ingredient1)) &&
+                          pair.ingredients2.some(i => ingredient2.includes(i) || i.includes(ingredient2));
+        const match2to1 = pair.ingredients2.some(i => ingredient1.includes(i) || i.includes(ingredient1)) &&
+                          pair.ingredients1.some(i => ingredient2.includes(i) || i.includes(ingredient2));
         
-        if ((match1 && match2) || (match2 && match1)) {
+        if (match1to2 || match2to1) {
+            console.log(`相性問題発見: ${ingredient1} × ${ingredient2}`); // デバッグ用
             return pair;
         }
     }
@@ -1234,12 +1272,13 @@ function displayCompatibilityWarnings(conflicts) {
     let html = '';
     conflicts.forEach((conflict, index) => {
         const severityIcon = conflict.severity === 'high' ? '🔴' : '🟡';
+        const severityText = conflict.severity === 'high' ? '高' : '中';
         html += `
-            <div style="margin-bottom: ${index < conflicts.length - 1 ? '12px' : '0'};">
-                <div style="font-weight: bold; color: #e65100; margin-bottom: 4px;">
-                    ${severityIcon} ${conflict.newIngredient} × ${conflict.existingProduct}
+            <div style="margin-bottom: ${index < conflicts.length - 1 ? '12px' : '0'}; padding: 12px; background: #fff3e0; border-left: 4px solid #ff9800; border-radius: 4px;">
+                <div style="font-weight: bold; color: #e65100; margin-bottom: 6px;">
+                    ${severityIcon} 使用中の「${conflict.existingProduct}」と相性注意（重大度: ${severityText}）
                 </div>
-                <div style="margin-bottom: 4px;">${conflict.reason}</div>
+                <div style="margin-bottom: 6px; color: #333;">${conflict.reason}</div>
                 <div style="font-size: 0.85rem; color: #666;">
                     💡 ${conflict.recommendation}
                 </div>
@@ -1251,7 +1290,127 @@ function displayCompatibilityWarnings(conflicts) {
 }
 
 function openMyItemsManager() {
-    alert('Myアイテム管理機能（開発中）');
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    
+    const content = document.createElement('div');
+    content.style.cssText = 'background:white;border-radius:12px;padding:24px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;';
+    
+    let html = '<h2 style="margin:0 0 16px 0;color:#2E86AB;">Myアイテム管理</h2>';
+    
+    if (myItems.length === 0) {
+        html += '<p style="color:#999;text-align:center;padding:40px 0;">登録されたアイテムはありません</p>';
+    } else {
+        html += '<div style="margin-bottom:16px;">';
+        myItems.forEach((item, index) => {
+            const ingredientCount = Array.isArray(item.ingredients) ? item.ingredients.length : item.ingredients.split(/[、,，]/).length;
+            html += `
+                <div style="padding:12px;border:1px solid #ddd;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <div style="font-weight:bold;color:#333;">${item.name}</div>
+                        <div style="font-size:0.85rem;color:#666;margin-top:4px;">${ingredientCount}成分</div>
+                    </div>
+                    <button onclick="removeFromMyItems(${index});document.body.removeChild(document.querySelector('[data-modal]'));" 
+                            style="background:#e74c3c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:0.9rem;">
+                        削除
+                    </button>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    html += '<button onclick="document.body.removeChild(document.querySelector(\'[data-modal]\'))" style="width:100%;padding:12px;background:#95a5a6;color:white;border:none;border-radius:8px;cursor:pointer;font-size:1rem;">閉じる</button>';
+    
+    content.innerHTML = html;
+    modal.setAttribute('data-modal', 'true');
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+}
+
+function removeFromMyItems(index) {
+    myItems.splice(index, 1);
+    localStorage.setItem('hadashiru_my_items', JSON.stringify(myItems));
+    updateMyItemsList();
+}
+
+function addToMyItems() {
+    const productName = document.getElementById('product-name-input').value.trim();
+    
+    if (!productName) {
+        alert('製品名を入力してください');
+        return;
+    }
+    
+    if (!currentAnalysisData) {
+        alert('分析結果がありません');
+        return;
+    }
+    
+    const ingredientNames = currentAnalysisData.rawText.split(/[、,，]\s*/).filter(s => s.trim());
+    
+    const item = {
+        name: productName,
+        ingredients: ingredientNames
+    };
+    
+    myItems.push(item);
+    localStorage.setItem('hadashiru_my_items', JSON.stringify(myItems));
+    updateMyItemsList();
+    
+    console.log('Myアイテムに追加:', item);
+    console.log('現在のMyアイテム:', myItems);
+    
+    alert(`「${productName}」をMyアイテムに追加しました（${ingredientNames.length}成分）`);
+}
+
+function openProductManager() {
+    const saved = getSavedProducts();
+    
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    
+    const content = document.createElement('div');
+    content.style.cssText = 'background:white;border-radius:12px;padding:24px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto;';
+    
+    let html = '<h2 style="margin:0 0 16px 0;color:#2E86AB;">保存済み製品管理</h2>';
+    
+    if (saved.length === 0) {
+        html += '<p style="color:#999;text-align:center;padding:40px 0;">保存された製品はありません</p>';
+    } else {
+        html += '<div style="margin-bottom:16px;">';
+        saved.forEach((product, index) => {
+            html += `
+                <div style="padding:12px;border:1px solid #ddd;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <div style="font-weight:bold;color:#333;">${product.name}</div>
+                        ${product.brand ? `<div style="font-size:0.8rem;color:#999;">${product.brand}</div>` : ''}
+                        <div style="font-size:0.85rem;color:#666;margin-top:4px;">${new Date(product.savedAt).toLocaleDateString('ja-JP')}</div>
+                    </div>
+                    <button onclick="deleteProduct('${product.name}');document.body.removeChild(document.querySelector('[data-modal-products]'));" 
+                            style="background:#e74c3c;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:0.9rem;">
+                        削除
+                    </button>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    html += '<button onclick="document.body.removeChild(document.querySelector(\'[data-modal-products]\'))" style="width:100%;padding:12px;background:#95a5a6;color:white;border:none;border-radius:8px;cursor:pointer;font-size:1rem;">閉じる</button>';
+    
+    content.innerHTML = html;
+    modal.setAttribute('data-modal-products', 'true');
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+}
+
+function deleteProduct(productName) {
+    const saved = getSavedProducts();
+    const filtered = saved.filter(p => p.name !== productName);
+    localStorage.setItem('ecoskin_saved_products', JSON.stringify(filtered));
+    loadSavedProductsList();
+    alert(`「${productName}」を削除しました`);
 }
 
 // === 🔍 検証機能 ===
