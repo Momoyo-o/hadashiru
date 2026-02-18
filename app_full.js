@@ -3,7 +3,7 @@
 // ========================================
 
 // 🔑 ここにあなたのGemini APIキーを貼り付けてください
-const GEMINI_API_KEY = 'AIzaSyDp5WnlZrdg5TV1DaCb7SixzVF9H0ynx08';
+const GEMINI_API_KEY = prompt('Gemini APIキーを入力してください:');
 
 // === グローバル変数 ===
 let userProfile = {
