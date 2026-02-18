@@ -334,6 +334,7 @@ function completeOnboarding() {
 
 // ページロード時にオンボーディングチェック
 document.addEventListener('DOMContentLoaded', () => {
-    // startOnboarding();
+    startOnboarding();
 
 });
+
