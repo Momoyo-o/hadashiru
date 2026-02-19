@@ -5,6 +5,25 @@
 // 🔑 ここにあなたのGemini APIキーを貼り付けてください
 const GEMINI_API_KEY = prompt('Gemini APIキーを入力してください:');
 
+// 🌐 Gemini API呼び出し（ローカル開発用）
+async function callGeminiAPI(requestBody) {
+    // ローカル開発時は直接APIを呼ぶ
+    const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        }
+    );
+    
+    if (!response.ok) {
+        throw new Error(`Gemini API error: ${response.status}`);
+    }
+    
+    return await response.json();
+}
+
 // === グローバル変数 ===
 let userProfile = {
     skinTypes: [],
@@ -401,15 +420,12 @@ function addToDatabase(newIngredients) {
     }
 }
 
-// === 旧：AIによる総合評価（現在は未使用） ===
-// 現在は calculateFormulaBasedOverallScore で数式ベースのスコア計算を行っており、
-// この関数は使用していません。コメントとして残しています。
-/*
+// === AIによる総合評価（詳細評価用） ===
 async function analyzeIngredientsWithGemini(ingredients, rawText) {
     const profileInfo = `
 ユーザープロフィール:
 - 肌質: ${userProfile.skinTypes.length > 0 ? userProfile.skinTypes.map(t => {
-    const map = {dry: '乾燥肌', oily: '脂性肌', sensitive: '敏感肌', mixed: '混合肌'};
+    const map = {dry: '乾燥肌', oily: '脂性肌', sensitive: '敏感肌', mixed: '混合肌', aging: 'エイジングケア'};
     return map[t];
 }).join('、') : '未設定'}
 - 避けたい成分: ${userProfile.avoidIngredients.length > 0 ? userProfile.avoidIngredients.map(a => {
@@ -444,52 +460,42 @@ ${rawText}
 理由: [50文字以内]
 詳細: [150文字以内]`;
 
-    aiLogs.analysisPrompt = prompt;
-    
-    const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: prompt }]
-                }],
-                generationConfig: {
-                    temperature: 0.3
-                }
-            })
-        }
-    );
-    
-    if (!response.ok) {
-        throw new Error(`Gemini API error: ${response.status}`);
+    try {
+        const data = await callGeminiAPI({
+            contents: [{
+                parts: [{ text: prompt }]
+            }],
+            generationConfig: {
+                temperature: 0.3
+            }
+        });
+        
+        const analysisText = data.candidates[0].content.parts[0].text;
+        console.log('🤖 AI生出力:', analysisText);
+        
+        const matchScore = analysisText.match(/適合度[：:]\s*(\d+)%/);
+        const matchReason = analysisText.match(/理由[：:]\s*(.+?)(?:\n|$)/);
+        const matchDetail = analysisText.match(/詳細[：:]\s*([\s\S]+?)(?:\n\n|$)/);
+        
+        console.log('matchDetail:', matchDetail);
+        
+        return {
+            score: matchScore ? parseInt(matchScore[1]) : 75,
+            reason: matchReason ? matchReason[1].trim() : '',
+            detail: matchDetail ? matchDetail[1].trim() : analysisText,
+            raw: analysisText
+        };
+    } catch(e) {
+        console.error('❌ AI総合評価取得失敗:', e);
+        console.error('エラー詳細:', e.message, e.stack);
+        return {
+            score: 0,
+            reason: '',
+            detail: `AI分析を取得できませんでした。エラー: ${e.message}`,
+            raw: ''
+        };
     }
-    
-    const data = await response.json();
-    aiLogs.analysisResponse = JSON.stringify(data, null, 2);
-    
-    const analysisText = data.candidates[0].content.parts[0].text;
-    
-    const matchScore = analysisText.match(/適合度[：:]\s*(\d+)%/);
-    const matchReason = analysisText.match(/理由[：:]\s*(.+)/);
-    const matchDetail = analysisText.match(/詳細[：:]\s*(.+)/);
-    
-    return {
-        score: matchScore ? parseInt(matchScore[1]) : 75,
-        reason: matchReason ? matchReason[1].trim() : '',
-        detail: matchDetail ? matchDetail[1].trim() : analysisText,
-        raw: analysisText
-    };
 }
-*/
-
-// 現在使用中のダミー関数（呼び出しは残っているが、結果は使用されない）
-async function analyzeIngredientsWithGemini(ingredients, rawText) {
-    return { score: 0, reason: '', detail: '', raw: '' };
-}
-
-// === 結果表示 ===
 async function displayResults(ingredients, aiAnalysis, rawText) {
     document.getElementById('result-area').style.display = 'block';
     
@@ -516,7 +522,7 @@ async function displayResults(ingredients, aiAnalysis, rawText) {
     displayScores(scores);
     
     // 🔍 検証用：計算過程を記録
-    logOverallMatchCalculation(formulaBasedScore, validatedIngredients);
+    logOverallMatchCalculation(aiAnalysis, validatedIngredients);
     logSkinScoreCalculation(scores, validatedIngredients);
     
     const hasAllergy = validatedIngredients.some(i => i.allergy);
@@ -531,20 +537,29 @@ async function displayResults(ingredients, aiAnalysis, rawText) {
     }
     
     displayBadges(validatedIngredients);
-    document.getElementById('ai-summary').innerText = aiAnalysis.detail || aiAnalysis.raw;
+    
+    // 🤖 AIによる総合評価（詳細な文章説明）
+    console.log('aiAnalysis:', aiAnalysis);
+    const detailText = aiAnalysis.detail || aiAnalysis.raw || 'AI分析を取得できませんでした。';
+    console.log('表示するdetail:', detailText);
+    document.getElementById('ai-summary').innerText = detailText;
+    
     displayIngredientList(ingredients, rawText);
 }
 
-function displayOverallMatch(aiAnalysis) {
+function displayOverallMatch(formulaBasedScore) {
     const matchContainer = document.getElementById('overall-match');
     const scoreElement = document.getElementById('match-score');
     const reasonElement = document.getElementById('match-reason');
     
     matchContainer.style.display = 'block';
     
-    const score = aiAnalysis.score || 70;
+    const score = formulaBasedScore.score || 70;
     scoreElement.innerText = score + '%';
-    reasonElement.innerText = aiAnalysis.detail || aiAnalysis.reason || '分析結果を確認してください';
+    
+    // 計算過程を表示（改行を<br>に変換）
+    const detailText = formulaBasedScore.detail || '';
+    reasonElement.innerHTML = detailText.replace(/\n/g, '<br>');
     
     if (score >= 80) {
         matchContainer.style.background = 'linear-gradient(135deg, #27ae60, #2ecc71)';
@@ -1415,59 +1430,29 @@ function deleteProduct(productName) {
 
 // === 🔍 検証機能 ===
 function logOverallMatchCalculation(aiAnalysis, ingredients) {
-    const log = {
-        timestamp: new Date().toLocaleString('ja-JP'),
-        method: 'AI判定（Gemini Text API）',
-        input: {
-            ingredients: ingredients.map(i => i.name),
-            ingredientCount: ingredients.length,
-            userProfile: {
-                skinTypes: userProfile.skinTypes,
-                avoidIngredients: userProfile.avoidIngredients,
-                ethicalValues: userProfile.ethicalValues
-            }
-        },
-        output: {
-            score: aiAnalysis.score,
-            reason: aiAnalysis.reason,
-            detail: aiAnalysis.detail
-        },
-        explanation: {
-            description: 'Gemini APIに「適合度を0-100%で評価して」と依頼し、AIが総合判断',
-            factors: [
-                '✓ 検出された成分の種類と効果',
-                '✓ ユーザーの肌質との相性',
-                '✓ 避けたい成分の有無',
-                '✓ 重視する価値観との整合性'
-            ],
-            note: '※ コード内に固定の計算式はなく、AIが文脈を理解して判定'
-        }
-    };
-    
     const logElement = document.getElementById('match-calculation-log');
     if (logElement) {
+        // 各項目をaiAnalysisから取得
+        const score = aiAnalysis.score || "不明";
+        const reason = aiAnalysis.reason || "（理由を取得できませんでした）";
+        const detail = aiAnalysis.detail || "（詳細を取得できませんでした）";
+
         logElement.innerHTML = `
-<pre style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.75rem;">
-<strong>【計算方法】</strong>
-${log.explanation.description}
+<pre style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.75rem; line-height: 1.5; padding: 10px; background: #fff; border: 1px solid #eee;">
+<strong>【AI鑑定スコア】</strong>
+<code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-weight: bold;">適合度: ${score}%</code>
 
-<strong>【判定要素】</strong>
-${log.explanation.factors.join('\n')}
+<strong>【鑑定理由】</strong>
+${reason}
 
-<strong>【入力データ】</strong>
-・成分数: ${log.input.ingredientCount}個
-・肌質設定: ${log.input.userProfile.skinTypes.length > 0 ? log.input.userProfile.skinTypes.join('、') : '未設定'}
+<strong>【分析詳細】</strong>
+${detail}
 
-<strong>【出力結果】</strong>
-・総合適合度: <span style="color: var(--primary); font-weight: bold;">${log.output.score}%</span>
-・判定理由: ${log.output.reason}
-
-<em>記録日時: ${log.timestamp}</em>
+<hr style="border: none; border-top: 1px dashed #ccc; margin: 10px 0;">
+<em style="font-size: 0.65rem;">記録日時: ${new Date().toLocaleString('ja-JP')}</em>
 </pre>
         `;
     }
-    
-    return log;
 }
 
 function logSkinScoreCalculation(scores, ingredients) {
